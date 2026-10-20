@@ -53,6 +53,7 @@ from .graph import pagerank as _pagerank, critical_path as _critical_path
 from .graph import reachability_from as _reachability_from
 from .graph import propagation_potential as _propagation_potential
 from .graph import PAGERANK_DAMPING, PAGERANK_ITERATIONS
+from . import vsl as _vsl
 
 console = Console()
 
@@ -2278,6 +2279,12 @@ class AgentHandoverAnalyser:
 
     def _build_handover(self, source_info: dict, to_agent: str, data_var: str, line_num: int, lines: list, filepath: str) -> dict:
         pre_node = _assess_pre_node_strength(lines, line_num)
+        vsl_report = getattr(self, "vsl_report", None)
+        vsl_gate = vsl_report.gated_node_gate(filepath, to_agent) if vsl_report else None
+        if vsl_gate:
+            pre_node = _strongest_pre_node(pre_node, {
+                "type": "vsl_gate", "strength": _vsl.VSL_GATE_STRENGTH, "evidence_line": vsl_gate,
+            })
         pre_node_exists = pre_node is not None and pre_node["strength"] >= GOVERNANCE_STRENGTH_THRESHOLD
 
         return {
@@ -3411,6 +3418,103 @@ def _find_signature_governance(lines: list, line_num: int, scan_range: int = 60)
     return None
 
 
+# Agent actions (0.7.0): what an AI agent can do on its own -- call a model,
+# call a tool -- is consequential in itself, whatever the tool's body does.
+AGENT_ACTION_TYPES = {
+    "agent_tool_call": {"blast_radius": "department", "business_impact": "medium"},
+    "model_call": {"blast_radius": "customer", "business_impact": "medium"},
+}
+
+
+def _agent_tool_actions(content: str, rel_path: str, lines: list, vsl_report) -> list:
+    """One (decision point, consequence) pair per @tool function: a tool
+    the model can call is a consequential action. Governed when a VSL gate
+    covers it or a generic Pre-Node guards its body."""
+    try:
+        tree = _ast_parse_quiet(content, rel_path)
+    except (SyntaxError, ValueError, RecursionError):
+        return []
+    pairs = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not _vsl._is_tool_function(node):
+            continue
+        location = f"{rel_path}:{node.lineno}"
+        first_body_line = node.body[0].lineno if node.body else node.lineno
+        pre_node = _strongest_pre_node(
+            _assess_pre_node_strength(lines, first_body_line),
+            vsl_report.pre_node_for(rel_path, node.lineno) if vsl_report else None,
+        )
+        pairs.append(({
+            "type": "agent_tool_call",
+            "location": location,
+            "line": node.lineno,
+            "condition": f"tool {node.name}",
+            "call": f"tool:{node.name}",
+            "branches": 1,
+            "severity": "high",
+            "pre_node": pre_node,
+        }, {
+            "decision_location": location,
+            "decision_type": "agent_tool_call",
+            "consequence_type": "agent_tool_call",
+            "location": location,
+            "action": f"agent tool {node.name}",
+            "reversible": True,
+            "severity": "high",
+        }))
+    return pairs
+
+
+def _agent_action_summary(gamma_variants) -> dict:
+    """Governed/total for each kind of agent action, plus both together."""
+    by_type = gamma_variants.by_consequence_type
+    parts = {}
+    for key, c_type in (("tools", "agent_tool_call"), ("model_calls", "model_call")):
+        g = by_type.get(c_type)
+        parts[key] = {"governed": g.governed if g else 0, "total": g.total if g else 0}
+    parts["total"] = {
+        "governed": sum(p["governed"] for p in parts.values()),
+        "total": sum(p["total"] for p in parts.values()),
+    }
+    return parts
+
+
+def _vsl_summary(vsl_report) -> dict:
+    if vsl_report is None or not vsl_report.detected:
+        return {"detected": False, "gates_total": 0, "gates_by_kind": {}}
+    data = vsl_report.to_dict()
+    return {"detected": True, "gates_total": data["gates_total"], "gates_by_kind": data["gates_by_kind"]}
+
+
+def _agent_action_lines(summary: dict) -> list:
+    """Scorecard lines for agent actions and VSL gates (empty if no actions)."""
+    actions = summary.get("agent_actions") or {}
+    total = actions.get("total", {})
+    lines = []
+    if total.get("total"):
+        tools, models = actions.get("tools", {}), actions.get("model_calls", {})
+        lines.append(
+            f"Agent Actions Governed:            {total['governed']} / {total['total']}"
+            f"  (tools {tools.get('governed', 0)}/{tools.get('total', 0)}, "
+            f"model calls {models.get('governed', 0)}/{models.get('total', 0)})"
+        )
+    vsl = summary.get("vsl") or {}
+    if vsl.get("detected"):
+        kinds = ", ".join(f"{n} {k}" for k, n in sorted(vsl.get("gates_by_kind", {}).items()))
+        lines.append(f"VSL Gates Recognised:              {vsl['gates_total']}  ({kinds})")
+        lines.append(
+            "  Credited from their wiring. Not verified: declared F1/F2 assurance, "
+            "Gamma monitors, or runtime behaviour."
+        )
+    return lines
+
+
+def _strongest_pre_node(*candidates: Optional[dict]) -> Optional[dict]:
+    """The strongest of several Pre-Node assessments (None ignored)."""
+    found = [c for c in candidates if c]
+    return max(found, key=lambda c: c.get("strength", 0.0)) if found else None
+
+
 def _assess_pre_node_strength(
     lines: list,
     line_num: int,
@@ -3809,7 +3913,7 @@ class ScanEngine:
             "scan_date": datetime.now(timezone.utc).isoformat(),
             "repo": str(path),
             "identity_key": identity_key,
-            "verba_version": "0.6.0",
+            "verba_version": "0.7.0",
             "context_profile": self.context_profile,
             "all_frameworks": self.all_frameworks,
             "reviewed": False,
@@ -3839,6 +3943,7 @@ class ScanEngine:
                 if self.verbose:
                     console.print(f"[dim]Pub/sub handover scan error: {e}[/dim]")
             results["primitives"] = primitives
+            results["vsl"] = self.vsl_report.to_dict()
             results["language_coverage"] = _compute_language_coverage(parsed)
             progress.update(t2, completed=True)
 
@@ -4137,7 +4242,14 @@ class ScanEngine:
         ]
         primitives["decision_points"] = [
             d for d in primitives.get("decision_points", [])
-            if d.get("type") != "agent_invocation" or d.get("framework") in DEFAULT_FRAMEWORK_SCOPE
+            if d.get("type") not in ("agent_invocation", "model_call")
+            or d.get("framework") in DEFAULT_FRAMEWORK_SCOPE
+            or (d.get("type") == "model_call" and d.get("framework") == "ai_framework")
+        ]
+        kept = {d["location"] for d in primitives["decision_points"]}
+        primitives["consequences"] = [
+            c for c in primitives.get("consequences", [])
+            if c.get("consequence_type") != "model_call" or c.get("decision_location") in kept
         ]
 
     def _detect_primitives(self, parsed: list, base_path: Path) -> dict:
@@ -4154,6 +4266,16 @@ class ScanEngine:
             "terminal_states": [],
             "governance_theatre": [],
         }
+
+        # VSL gate recognition: one repo-wide pass, consulted below wherever
+        # "governed" is decided. See x_verba/vsl.py.
+        try:
+            self.vsl_report = _vsl.analyse(parsed, base_path)
+        except Exception as e:
+            self.vsl_report = _vsl.VslReport()
+            if self.verbose:
+                console.print(f"[dim]VSL gate scan error: {e}[/dim]")
+        self.handover_analyser.vsl_report = self.vsl_report
 
         # First pass: identify AI-containing files
         ai_file_paths = {str(f["path"]) for f in parsed if f["has_ai"]}
@@ -4190,7 +4312,8 @@ class ScanEngine:
                     ast_result = self.ast_analyser.analyse(content, str(rel_path))
                     for call in ast_result["ai_calls"]:
                         _pn_result = _assess_pre_node_strength(lines, call["line"], language="python")
-                        pre_node = _pn_result is not None
+                        vsl_governed = self.vsl_report.gates_model_call
+                        pre_node = _pn_result is not None or vsl_governed
                         human_review = _has_human_review(lines, call["line"])
                         primitives["ai_integrations"].append({
                             "id": f"AI-{len(primitives['ai_integrations'])+1:03d}",
@@ -4204,9 +4327,40 @@ class ScanEngine:
                             "user_input_in_prompt": self._has_user_input_in_prompt(content, call["line"]),
                             "pre_node_detected": pre_node,
                             "human_review_detected": human_review,
+                            "vsl_governed": vsl_governed,
                             "output_destination": self._detect_output_destination(lines, call["line"]),
                             "source_file": str(rel_path),
                             "file_context": file_context,
+                        })
+                        _model_location = f"{rel_path}:{call['line']}"
+                        primitives["decision_points"].append({
+                            "type": "model_call",
+                            "location": _model_location,
+                            "line": call["line"],
+                            "condition": call["line_content"][:120],
+                            "call": f"model:{call['provider']}",
+                            "framework": call["provider"],
+                            "branches": 1,
+                            "severity": "high",
+                            # Same rule as the AI inventory: governed by a
+                            # VSL gate, or by a Pre-Node plus human review.
+                            "pre_node": (
+                                {
+                                    "type": "vsl_gate", "strength": _vsl.VSL_GATE_STRENGTH,
+                                    "evidence_line": "VSL PreNode in front of the model call",
+                                } if vsl_governed
+                                else _pn_result if (_pn_result and human_review)
+                                else None
+                            ),
+                        })
+                        primitives["consequences"].append({
+                            "decision_location": _model_location,
+                            "decision_type": "model_call",
+                            "consequence_type": "model_call",
+                            "location": _model_location,
+                            "action": f"model call ({call['provider']})",
+                            "reversible": True,
+                            "severity": "high",
                         })
                 except Exception as e:
                     if self.verbose:
@@ -4216,13 +4370,23 @@ class ScanEngine:
                 try:
                     decision_points = self.decision_analyser.analyse(content, str(rel_path))
                     for dp in decision_points:
-                        dp["pre_node"] = _assess_pre_node_strength(lines, dp["line"])
+                        dp["pre_node"] = _strongest_pre_node(
+                            _assess_pre_node_strength(lines, dp["line"]),
+                            self.vsl_report.pre_node_for(str(rel_path), dp["line"]),
+                        )
                     primitives["decision_points"].extend(decision_points)
 
                     # Pass 2 — classify consequences of each decision point
                     primitives["consequences"].extend(
                         self.consequence_classifier.classify(decision_points, lines)
                     )
+
+                    # Agent actions: every @tool the model can call
+                    for _action_dp, _action_c in _agent_tool_actions(
+                        content, str(rel_path), lines, self.vsl_report,
+                    ):
+                        primitives["decision_points"].append(_action_dp)
+                        primitives["consequences"].append(_action_c)
 
                     # Pass 5 — terminal states (unhandled exceptions, no recovery)
                     if should_scan_terminal_states:
@@ -5080,6 +5244,8 @@ class ScanEngine:
             # decision points + agent handovers — this is the value the terminal
             # scorecard's "Structural Gamma" line and the report's GOVERNANCE
             # SCORECARD section both display.
+            "agent_actions": _agent_action_summary(gamma_variants),
+            "vsl": _vsl_summary(getattr(self, "vsl_report", None)),
             "structural_gamma": gamma_variants.overall.value,
             "governance_coverage": f"{round(gamma_variants.overall.value * 100)}%",
             "governance_status": gamma_variants.overall.status,
@@ -5446,11 +5612,15 @@ def classify_consequence_type(action_text: str, base_type: Optional[str] = None)
 
 def estimate_blast_radius(consequence_type: str) -> str:
     """Default blast radius for a detailed consequence type (organization if unknown)."""
+    if consequence_type in AGENT_ACTION_TYPES:
+        return AGENT_ACTION_TYPES[consequence_type]["blast_radius"]
     return CONSEQUENCE_TYPE_TAXONOMY.get(consequence_type, {}).get("blast_radius", "organization")
 
 
 def estimate_business_impact(consequence_type: str) -> str:
     """Default business impact for a detailed consequence type (medium if unknown)."""
+    if consequence_type in AGENT_ACTION_TYPES:
+        return AGENT_ACTION_TYPES[consequence_type]["business_impact"]
     return CONSEQUENCE_TYPE_TAXONOMY.get(consequence_type, {}).get("business_impact", "medium")
 
 
@@ -5465,7 +5635,10 @@ class ConsequenceEnricher:
         dp_by_location = {dp["location"]: dp for dp in primitives.get("decision_points", [])}
         enriched = []
         for c in primitives.get("consequences", []):
-            detailed_type = classify_consequence_type(c.get("action", ""), c.get("consequence_type"))
+            if c.get("consequence_type") in AGENT_ACTION_TYPES:
+                detailed_type = c["consequence_type"]
+            else:
+                detailed_type = classify_consequence_type(c.get("action", ""), c.get("consequence_type"))
             dp = dp_by_location.get(c["decision_location"], {})
             pre_node = dp.get("pre_node") or {}
             strength = pre_node.get("strength", 0.0)
@@ -5677,7 +5850,7 @@ class InventoryBuilder:
             provider = ai.get("provider", "unknown")
             by_provider[provider] = by_provider.get(provider, 0) + 1
 
-            if ai.get("pre_node_detected") and ai.get("human_review_detected"):
+            if (ai.get("pre_node_detected") and ai.get("human_review_detected")) or ai.get("vsl_governed"):
                 governed += 1
 
             temperature = ai.get("temperature") or 0
@@ -6158,6 +6331,11 @@ class ReportBuilder:
             f"  └─ Ungoverned Decision Points:   {ungoverned} ({_pct(ungoverned, overall.total)})"
         )
         lines.append("")
+
+        action_lines = _agent_action_lines(summary)
+        if action_lines:
+            lines.extend(action_lines)
+            lines.append("")
 
         lines.append(f"Tendency State:                     {tendency.state.value.upper()}")
         amp = "Yes" if tendency.t_amplification_active else "No"

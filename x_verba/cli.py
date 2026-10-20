@@ -36,7 +36,7 @@ BANNER = """
 
 
 @click.group()
-@click.version_option(version="0.6.0", prog_name="x-verba")
+@click.version_option(version="0.7.0", prog_name="x-verba")
 def main():
     """
     X-Verba — Find the governance gaps in your AI code before your users do.
@@ -641,6 +641,18 @@ def _print_terminal_summary(results, output_path):
     if gamma_val is not None:
         gamma_pct = int(round(gamma_val * 100))
         console.print(f"[dim]  {gamma_pct}% of governance-relevant decision points have an observable governance checkpoint.[/dim]")
+    actions = stats.get("agent_actions") or {}
+    if (actions.get("total") or {}).get("total"):
+        t, tools, models = actions["total"], actions.get("tools", {}), actions.get("model_calls", {})
+        console.print(
+            f"[dim]Agent actions governed:[/dim] {t['governed']}/{t['total']}  "
+            f"[dim](tools {tools.get('governed', 0)}/{tools.get('total', 0)}, "
+            f"model calls {models.get('governed', 0)}/{models.get('total', 0)})[/dim]"
+        )
+    vsl = stats.get("vsl") or {}
+    if vsl.get("detected"):
+        kinds = ", ".join(f"{n} {k}" for k, n in sorted(vsl.get("gates_by_kind", {}).items()))
+        console.print(f"[dim]VSL gates recognised:[/dim]   {vsl['gates_total']}  [dim]({kinds}; wiring only, not verified)[/dim]")
 
     if tendency_state == "failure":
         console.print(f"[bold red]Tendency:[/bold red]               {tendency_state.upper()}")

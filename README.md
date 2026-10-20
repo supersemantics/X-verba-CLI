@@ -426,6 +426,13 @@ X-Verba looks for safeguards you've already built:
 - **Allow/deny lists** — Whitelisting permitted operations
 - **Audit trails** — Logging consequential decisions
 - **Circuit breakers** — Stopping escalation after N steps
+- **VSL gates** — `PreNode`/`Invariant` gates from vsl-core, wired in front of graph nodes (`gated_node`), tools (a gated `ToolNode`, `VSLToolMiddleware`) or an explicit `await gate(...)`. Credited from their wiring; see "VSL gates" below.
+
+### Agent Actions
+Every `@tool` function an agent's model can call, and every AI model integration, is a consequential action in its own right, counted in Structural Gamma and shown on its own scorecard line (`Agent Actions Governed: 7 / 8 (tools 6/7, model calls 1/1)`). A model call counts as governed with a Pre-Node plus human review, or a VSL gate in front of it.
+
+### VSL gates
+If a repository uses VSL (VERBA Specification Language: vsl-core with the vsl-langgraph or vsl-langchain adapter), X-Verba lists its gates and credits the code each one guards. It reads the wiring only. It does **not** verify whether a gate's declared F1/F2 assurance is honest, whether its Gamma monitor measures anything, or whether the gate fires at runtime.
 
 ---
 
@@ -523,6 +530,8 @@ Fails your build if:
 ## Understanding the Gamma Score (Γ)
 
 **Γ = Governed Decision Points / Total Decision Points**
+
+Decision points here are the consequential ones: those followed by a side effect (a payment, a database write, an email, an external API call…) and, since 0.7.0, every agent action (each tool the model can call, each model call).
 
 - **Γ = 1.0** — Every decision is safeguarded
 - **Γ = 0.75** — 75% of decisions have governance

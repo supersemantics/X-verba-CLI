@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.0
+
+### Added
+
+- **VSL gate recognition.** X-Verba now identifies gates built with VSL
+  (vsl-core, vsl-langgraph, vsl-langchain) and counts the code they guard
+  as governed: graph nodes wrapped with `gated_node`, tools gated through a
+  gated `ToolNode` or `VSLToolMiddleware`, and code after an explicit
+  `await gate(...)`. Recognised gates are listed in a new `vsl` report
+  section and on the scorecard.
+- **Agent actions.** Tools an agent's model can call (`@tool`) and model
+  calls are now counted as consequential decision points, with their own
+  scorecard line (`Agent Actions Governed`).
+
+### Changed
+
+- Structural Gamma now includes agent actions, so scores for agent
+  repositories may differ from 0.6.0.
+- The checked-in `evidence/` scans were produced by 0.6.0 and predate
+  this release.
+
 ## 0.6.0
 
 ### Changed
