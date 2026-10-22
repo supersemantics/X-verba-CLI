@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.0
+
+### Added
+
+- **VSL gate recognition.** X-Verba now identifies gates built with VSL
+  (vsl-core, vsl-langgraph, vsl-langchain) and counts the code they guard
+  as governed: graph nodes wrapped with `gated_node`, tools gated through a
+  gated `ToolNode` or `VSLToolMiddleware`, and code after an explicit
+  `await gate(...)`. Recognised gates are listed in a new `vsl` report
+  section and on the scorecard.
+- **Agent actions.** Tools an agent's model can call (`@tool`) and model
+  calls are now counted as consequential decision points, with their own
+  scorecard line (`Agent Actions Governed`).
+- **Gamma breakdown.** The JSON report lists every decision point
+  Structural Gamma counts (`gamma_breakdown`): what it is, where, whether
+  it is governed, and by which checkpoint.
+- **Human authorisation.** Actions that require a vsl-core
+  `HumanAuthorisedTransition`, and LangGraph's `interrupt`, are recognised
+  as human review and listed on the scorecard (`Human Authorisation`).
+
+### Changed
+
+- Structural Gamma now includes agent actions, so scores for agent
+  repositories may differ from 0.6.0.
+- More precise consequence detection: adding to a list or dict created in
+  the same function, and a browser `fetch` to the app's own origin (a
+  relative URL), are no longer counted as consequential actions. A
+  `try`/`finally` without an `except` is no longer reported as a silent
+  failure.
+- The checked-in `evidence/` scans were produced by 0.6.0 and predate
+  this release.
+
 ## 0.6.0
 
 ### Changed
