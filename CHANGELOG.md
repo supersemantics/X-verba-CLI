@@ -18,6 +18,9 @@
 
 - Structural Gamma now includes agent actions, so scores for agent
   repositories may differ from 0.6.0.
+- More precise consequence detection: adding to a list or dict created in
+  the same function, and a browser `fetch` to the app's own origin (a
+  relative URL), are no longer counted as consequential actions.
 - The checked-in `evidence/` scans were produced by 0.6.0 and predate
   this release.
 

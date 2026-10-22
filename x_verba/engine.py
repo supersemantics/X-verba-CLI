@@ -1629,6 +1629,57 @@ PATTERN_LANGUAGE_CONFIG = {
 
 # ── Consequence classification (Pass 2, NEW) ──────────────────────────────────
 
+_MUTATION_RECEIVER_RE = re.compile(r"(?<![\w.)\]])([A-Za-z_$][\w$]*)\s*\.\s*(?:append|update|pop|extend)\s*\(")
+_FUNCTION_START_RE = re.compile(r"^\s*(?:async\s+def|def|class|(?:export\s+)?(?:async\s+)?function)\b")
+
+
+def _mutates_local_container(lines: list, line_num: int, stripped: str) -> bool:
+    """True when every mutation on this line targets a list/dict/set that
+    was created in the same function: adding to a local working list is
+    not a consequential action. Attributes (``self.items.append``),
+    parameters and module-level containers still count."""
+    receivers = _MUTATION_RECEIVER_RE.findall(stripped)
+    if not receivers:
+        return False
+    for name in set(receivers):
+        creation = re.compile(
+            rf"^\s*(?:(?:const|let|var)\s+)?{re.escape(name)}\s*(?::[^=]+)?=\s*"
+            r"(?:\[|\{|list\(|dict\(|set\(|defaultdict\(|Counter\(|OrderedDict\()"
+        )
+        found = False
+        for i in range(line_num - 2, max(-1, line_num - 200), -1):
+            text = lines[i]
+            if creation.search(text):
+                found = True
+                break
+            if _FUNCTION_START_RE.search(text):
+                break  # reached the start of the enclosing function
+        if not found:
+            return False
+    return True
+
+
+def _is_same_origin_fetch(lines: list, stripped: str) -> bool:
+    """True for a browser ``fetch`` to a relative URL ('/api/...', or a
+    template starting with a constant that holds one, directly or as the
+    ``??`` default of a configurable value): a front end calling its own
+    backend is not an external API call."""
+    m = re.search(r"\bfetch\s*\(\s*([`'\"])([^`'\"]*)", stripped)
+    if not m:
+        return False
+    url = m.group(2)
+    if url.startswith("/") and not url.startswith("//"):
+        return True
+    const = re.match(r"\$\{\s*([A-Za-z_$][\w$]*)\s*\}", url)
+    if const:
+        decl = re.compile(
+            rf"\b(?:const|let|var)\s+{re.escape(const.group(1))}\s*(?::[^=]+)?=\s*"
+            r"(?:[^;\n]*\?\?\s*)?([`'\"])(?:/(?!/)|\1)"
+        )
+        return any(decl.search(text) for text in lines)
+    return False
+
+
 class ConsequenceClassifier:
     """
     Maps each decision point to the consequential action that follows it
@@ -1673,6 +1724,11 @@ class ConsequenceClassifier:
 
             for c_type, patterns in CONSEQUENCE_TYPE_PATTERNS.items():
                 if any(pattern in stripped for pattern in patterns):
+                    abs_line = line_num + offset + 1
+                    if c_type == "state_mutation" and _mutates_local_container(lines, abs_line, stripped):
+                        continue
+                    if c_type == "external_api" and _is_same_origin_fetch(lines, stripped):
+                        continue
                     return {
                         "decision_location": dp["location"],
                         "decision_type": dp["type"],
