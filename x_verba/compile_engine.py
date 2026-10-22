@@ -5,7 +5,7 @@ from rich.panel import Panel
 console = Console()
 
 NOT_IMPLEMENTED_MSG = """
-This command is coming in v0.7.
+This command is not yet available.
 
 x-verba compile will turn your approved governance.yaml into a
 machine-executable invariant bundle (.vsl) that the VERBA Runtime
@@ -16,7 +16,7 @@ or terraform plan for infrastructure. It validates before anything
 goes live. The Priming Engine loads the bundle and begins monitoring.
 Governance becomes provable, not claimed.
 
-Track progress: https://github.com/4vish/x-verba
+Track progress: https://github.com/supersemantics/X-verba-CLI
 """
 
 
@@ -30,7 +30,7 @@ class CompileEngine:
         return {
             "success": False,
             "status": "not_implemented",
-            "message": "x-verba compile is coming in v0.7. See https://github.com/4vish/x-verba",
+            "message": "x-verba compile is not yet available. See https://github.com/supersemantics/X-verba-CLI",
         }
 
     def validate(self, schema):
@@ -43,5 +43,5 @@ class CompileEngine:
             "valid": False,
             "status": "not_implemented",
             "issues": ["compile engine not yet implemented"],
-            "message": "x-verba compile is coming in v0.7. See https://github.com/4vish/x-verba",
+            "message": "x-verba compile is not yet available. See https://github.com/supersemantics/X-verba-CLI",
         }

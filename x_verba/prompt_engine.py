@@ -5,7 +5,7 @@ from rich.panel import Panel
 console = Console()
 
 NOT_IMPLEMENTED_MSG = """
-This command is coming in v0.6.
+This command is not yet available.
 
 x-verba prompt will generate governance-informed prompts for AI coding
 tools. Tell Claude, Copilot, or Cursor what the code must never do —
@@ -16,7 +16,7 @@ The same Identity Key and governance vocabulary runs through the full
 lifecycle: what was prompted → what was generated → what was scanned
 → what was compiled → what the runtime enforced.
 
-Track progress: https://github.com/4vish/x-verba
+Track progress: https://github.com/supersemantics/X-verba-CLI
 """
 
 
@@ -29,5 +29,5 @@ class PromptEngine:
         ))
         return {
             "status": "not_implemented",
-            "message": "x-verba prompt is coming in v0.6. See https://github.com/4vish/x-verba",
+            "message": "x-verba prompt is not yet available. See https://github.com/supersemantics/X-verba-CLI",
         }

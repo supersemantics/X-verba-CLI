@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "x-verba"
 version = "0.7.0"
 description = "Find the governance gaps in your code before your users do."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
   { name = "Super Semantics", email = "hello@supersemantics.org" }
 ]
@@ -19,7 +19,6 @@ keywords = [
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -45,9 +44,10 @@ test = [
 x-verba = "x_verba.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/4vish/x-verba"
-Repository = "https://github.com/4vish/x-verba"
-Documentation = "https://github.com/4vish/x-verba#readme"
+Homepage = "https://github.com/supersemantics/X-verba-CLI"
+Repository = "https://github.com/supersemantics/X-verba-CLI"
+Documentation = "https://github.com/supersemantics/X-verba-CLI#readme"
+Changelog = "https://github.com/supersemantics/X-verba-CLI/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 packages = ["x_verba", "x_verba.graph", "x_verba.tests"]

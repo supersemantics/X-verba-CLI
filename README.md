@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="assets/x-verba-logo.png" alt="X-Verba" width="420"/>
+  <img src="https://raw.githubusercontent.com/supersemantics/X-verba-CLI/main/assets/x-verba-logo.png" alt="X-Verba" width="420"/>
 </p>
 <p align="center">
   <sub>powered by</sub><br/>
-  <img src="assets/super-semantics-logo.png" alt="Super Semantics" width="100"/>
+  <img src="https://raw.githubusercontent.com/supersemantics/X-verba-CLI/main/assets/super-semantics-logo.png" alt="Super Semantics" width="100"/>
 </p>
 
 # X-Verba — Structural and Behavioral Governance Scanning for AI Agents
@@ -44,7 +44,7 @@ LangChain, and LangGraph only.** These get the most scrutiny — every
 detection pattern has been audited against real confirmed false positives
 (a Twilio SMS call mistaken for an Anthropic call, a NetworkX graph
 mistaken for a LangGraph one, an insurance-claims "agent" object mistaken
-for a LangChain agent — see [CHANGELOG](CHANGELOG.md) for the full list)
+for a LangChain agent — see [CHANGELOG](https://github.com/supersemantics/X-verba-CLI/blob/main/CHANGELOG.md) for the full list)
 and paired with a regression test locking the fix in. Narrower scope, but
 what it reports is held to a higher bar.
 
@@ -880,5 +880,5 @@ X-Verba operationalizes concepts from independent research on governance, drift,
 
 The research is independent. The implementation is open-source. Read both. Challenge both. Improve both.
 
-github.com/4vish/x-verba
+[github.com/supersemantics/X-verba-CLI](https://github.com/supersemantics/X-verba-CLI)
 
