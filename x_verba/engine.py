@@ -3581,6 +3581,55 @@ def _agent_action_lines(summary: dict) -> list:
     return lines
 
 
+def _gamma_breakdown(primitives: dict, decision_graph) -> List[dict]:
+    """The decision points Structural Gamma counts (those that lead to a
+    consequential action), one entry each: what it is, where, whether it is
+    governed, and by what. Same set as GammaVariantsBuilder.compute()."""
+    dps = {dp["location"]: dp for dp in primitives.get("decision_points", [])}
+    actions: Dict[str, dict] = {}
+    for c in primitives.get("consequences", []):
+        actions.setdefault(c.get("decision_location"), c)
+    consequences: Dict[str, set] = {}
+    for edge in decision_graph.edges:
+        consequences.setdefault(edge.from_node, set()).add(edge.consequence_type)
+
+    items = []
+    for loc, node in decision_graph.nodes.items():
+        if loc not in consequences:
+            continue
+        dp = dps.get(loc, {})
+        call = dp.get("call") or ""
+        if node.decision_type == "agent_tool_call":
+            kind, name = "agent_tool", call.split(":", 1)[-1]
+        elif node.decision_type == "model_call":
+            kind, name = "model_call", f"AI model call ({call.split(':', 1)[-1] or 'model'})"
+        else:
+            # Name it by the action it leads to (e.g. a fetch or a write).
+            action = actions.get(loc) or {}
+            label = (action.get("consequence_type") or node.decision_type).replace("_", " ")
+            text = (action.get("action") or node.condition or call).strip()
+            kind, name = node.decision_type, f"{label}: {text}"[:140]
+        file, _, line = loc.rpartition(":")
+        pre_node = dp.get("pre_node") or None
+        items.append({
+            "location": loc,
+            "file": file.replace("\\", "/"),
+            "line": int(line) if line.isdigit() else 0,
+            "kind": kind,
+            "name": name,
+            "consequence_types": sorted(consequences[loc]),
+            "action_location": (actions.get(loc) or {}).get("location", "").replace("\\", "/") or None,
+            "governed": bool(node.governed),
+            "checkpoint": {
+                "type": pre_node.get("type"),
+                "strength": pre_node.get("strength"),
+                "evidence": pre_node.get("evidence_line"),
+            } if pre_node else None,
+        })
+    order = {"model_call": 0, "agent_tool": 1}
+    return sorted(items, key=lambda i: (i["governed"], order.get(i["kind"], 2), i["file"], i["line"]))
+
+
 def _strongest_pre_node(*candidates: Optional[dict]) -> Optional[dict]:
     """The strongest of several Pre-Node assessments (None ignored)."""
     found = [c for c in candidates if c]
@@ -4168,6 +4217,10 @@ class ScanEngine:
                 propagation = {}
             progress.update(t16, completed=True)
 
+        try:
+            results["gamma_breakdown"] = _gamma_breakdown(primitives, decision_graph)
+        except Exception:
+            results["gamma_breakdown"] = []
         results["enhanced_consequences"] = [ec.to_dict() for ec in enhanced_consequences]
         results["graphs"] = {
             "agent_graph": agent_graph,

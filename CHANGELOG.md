@@ -13,6 +13,9 @@
 - **Agent actions.** Tools an agent's model can call (`@tool`) and model
   calls are now counted as consequential decision points, with their own
   scorecard line (`Agent Actions Governed`).
+- **Gamma breakdown.** The JSON report lists every decision point
+  Structural Gamma counts (`gamma_breakdown`): what it is, where, whether
+  it is governed, and by which checkpoint.
 - **Human authorisation.** Actions that require a vsl-core
   `HumanAuthorisedTransition`, and LangGraph's `interrupt`, are recognised
   as human review and listed on the scorecard (`Human Authorisation`).

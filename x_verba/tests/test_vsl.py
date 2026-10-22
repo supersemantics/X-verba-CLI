@@ -297,3 +297,24 @@ def test_vsl_tool_middleware_gates_named_tools(tmp_path):
     results = ScanEngine().scan(str(root))
     assert results["vsl"]["gated_tools"] == ["issue_refund"]
     assert _actions(results)["tools"] == {"governed": 1, "total": 2}
+
+
+# ── The itemised list behind Structural Gamma ──────────────────────────────
+
+
+@pytest.mark.parametrize("fixture", ["ungoverned", "governed"])
+def test_gamma_breakdown_matches_the_score(fixture, request):
+    results = request.getfixturevalue(fixture)
+    items = results["gamma_breakdown"]
+    overall = results["metrics"]["gamma_variants"].overall
+    assert len(items) == overall.total
+    assert sum(i["governed"] for i in items) == overall.governed
+    tools = {i["name"] for i in items if i["kind"] == "agent_tool"}
+    assert tools == {"lookup_order", "issue_refund"}
+    assert all(i["file"] and i["line"] > 0 for i in items)
+
+
+def test_gamma_breakdown_names_the_gate(governed):
+    refund = next(i for i in governed["gamma_breakdown"] if i["name"] == "issue_refund")
+    assert refund["governed"] is True
+    assert refund["checkpoint"]["evidence"] == "VSL PreNode 'refund-within-policy'"
