@@ -3606,9 +3606,8 @@ def _gamma_breakdown(primitives: dict, decision_graph) -> List[dict]:
         else:
             # Name it by the action it leads to (e.g. a fetch or a write).
             action = actions.get(loc) or {}
-            label = (action.get("consequence_type") or node.decision_type).replace("_", " ")
             text = (action.get("action") or node.condition or call).strip()
-            kind, name = node.decision_type, f"{label}: {text}"[:140]
+            kind, name = node.decision_type, text[:140]
         file, _, line = loc.rpartition(":")
         pre_node = dp.get("pre_node") or None
         items.append({
