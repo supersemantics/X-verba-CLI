@@ -18,7 +18,14 @@ One repo-wide pass over the parsed Python files records:
   ``VSLToolMiddleware``, and the code after an explicit ``await gate(...)``;
 - which graph nodes are gated (for agent handovers into them);
 - whether a gated node invokes a model (for AI integrations);
-- whether gate decisions are recorded (``write_gate_decision``).
+- whether gate decisions are recorded (``write_gate_decision``);
+- the graph nodes a denial is routed to (``route_on_denial``): governance's
+  own response, not an ungated stage.
+
+It also records human-authorisation mechanisms, with or without VSL: an
+action that cannot run without a vsl-core ``HumanAuthorisedTransition``
+(a parameter of that type), and LangGraph's human-in-the-loop
+(``interrupt()``, ``interrupt_before``/``interrupt_after``).
 
 The scan reads the wiring only; it does not evaluate the gates themselves.
 """
@@ -66,6 +73,8 @@ class VslReport:
     gated_tools: Dict[str, str] = field(default_factory=dict)  # tool function -> gate
     gates_model_call: bool = False
     records_gate_decisions: bool = False
+    denial_nodes: Dict[str, Dict[str, str]] = field(default_factory=dict)  # file -> {node: label}
+    human_authorisations: List[Dict[str, str]] = field(default_factory=list)
 
     # ── queries the engine asks ──────────────────────────────────────────
 
@@ -86,6 +95,10 @@ class VslReport:
     def gated_node_gate(self, rel_path: str, node_name: str) -> Optional[str]:
         return self.gated_graph_nodes.get(_norm(rel_path), {}).get(node_name)
 
+    def denial_node(self, rel_path: str, node_name: str) -> Optional[str]:
+        """The label for a graph node that only runs when a gate denies."""
+        return self.denial_nodes.get(_norm(rel_path), {}).get(node_name)
+
     def to_dict(self) -> dict:
         by_kind: Dict[str, int] = {}
         for gate in self.gates:
@@ -104,6 +117,10 @@ class VslReport:
             "gated_tools": sorted(self.gated_tools),
             "gates_model_call": self.gates_model_call,
             "records_gate_decisions": self.records_gate_decisions,
+            "denial_nodes": sorted(
+                f"{file}:{node}" for file, nodes in self.denial_nodes.items() for node in nodes
+            ),
+            "human_authorisations": list(self.human_authorisations),
             "note": (
                 "VSL gates are credited as governance checkpoints from their wiring. "
                 "This does not verify their declared F1/F2 assurance, their Gamma "
@@ -175,6 +192,51 @@ class _File:
                     self.imports[alias.asname or alias.name] = f"{node.module}.{alias.name}"
 
 
+def _annotation_name(annotation: Optional[ast.AST]) -> Optional[str]:
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        return annotation.value.rsplit(".", 1)[-1].strip()
+    return _call_name(annotation) if annotation is not None else None
+
+
+def _human_authorisations(f: _File) -> List[Dict[str, str]]:
+    """Human-authorisation mechanisms in one file (see module docstring)."""
+    found: List[Dict[str, str]] = []
+    hat_imported = any(
+        target.split(".")[0] in VSL_MODULE_ROOTS and target.endswith(".HumanAuthorisedTransition")
+        for target in f.imports.values()
+    )
+    if hat_imported:
+        for fn in f.functions.values():
+            params = fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs
+            if any(_annotation_name(a.annotation) == "HumanAuthorisedTransition" for a in params):
+                found.append({
+                    "kind": "VSL Human-Authorised Transition",
+                    "location": f"{f.rel}:{fn.lineno}",
+                    "evidence": f"{fn.name}() requires a HumanAuthorisedTransition",
+                })
+    interrupt_name = next(
+        (local for local, target in f.imports.items() if target == "langgraph.types.interrupt"), None
+    )
+    for node in ast.walk(f.tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if interrupt_name and isinstance(node.func, ast.Name) and node.func.id == interrupt_name:
+            found.append({
+                "kind": "LangGraph interrupt",
+                "location": f"{f.rel}:{node.lineno}",
+                "evidence": "interrupt() pauses the graph for a person",
+            })
+        elif _call_name(node.func) == "compile" and any(
+            k.arg in ("interrupt_before", "interrupt_after") for k in node.keywords
+        ) and any(t.startswith("langgraph.") for t in f.imports.values()):
+            found.append({
+                "kind": "LangGraph interrupt",
+                "location": f"{f.rel}:{node.lineno}",
+                "evidence": "graph compiled with interrupt_before/interrupt_after",
+            })
+    return found
+
+
 def analyse(parsed_files: List[dict], base_path: Path) -> VslReport:
     """One repo-wide pass over the parsed Python files (see module docstring)."""
     report = VslReport()
@@ -193,6 +255,7 @@ def analyse(parsed_files: List[dict], base_path: Path) -> VslReport:
             continue
         parsed = _File(rel, tree)
         all_files.append(parsed)
+        report.human_authorisations.extend(_human_authorisations(parsed))
         if _imports_vsl(tree):
             report.detected = True
             files.append(parsed)
@@ -300,6 +363,15 @@ def analyse(parsed_files: List[dict], base_path: Path) -> VslReport:
                     and wrapped.args
                 ):
                     report.gated_graph_nodes.setdefault(f.rel, {})[node_name.value] = label_for(wrapped.args[0])
+
+            # route_on_denial("denial_node", ...) — vsl-langgraph: that node
+            # only runs when a gate denies.
+            if name == "route_on_denial" and node.args:
+                target = node.args[0]
+                if isinstance(target, ast.Constant) and isinstance(target.value, str):
+                    report.denial_nodes.setdefault(f.rel, {})[target.value] = (
+                        f"VSL denial route to '{target.value}'"
+                    )
 
             # VSLToolMiddleware({"tool": gate}) — vsl-langchain.
             if name == "VSLToolMiddleware":

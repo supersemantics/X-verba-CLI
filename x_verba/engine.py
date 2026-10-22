@@ -1097,7 +1097,8 @@ class DecisionPointAnalyser:
                 points.append(self._conditional(node, lines, filepath, ternary=True))
             elif isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
                 points.append(self._loop(node, lines, filepath))
-            elif isinstance(node, ast.Try):
+            elif isinstance(node, ast.Try) and node.handlers:
+                # try/finally alone catches nothing: errors still propagate.
                 points.append(self._try_except(node, lines, filepath))
             elif isinstance(node, ast.Call):
                 call_point = self._function_call(node, lines, filepath, framework_corroboration)
@@ -2341,6 +2342,13 @@ class AgentHandoverAnalyser:
             pre_node = _strongest_pre_node(pre_node, {
                 "type": "vsl_gate", "strength": _vsl.VSL_GATE_STRENGTH, "evidence_line": vsl_gate,
             })
+        denial = vsl_report.denial_node(filepath, source_info["agent"]) if vsl_report else None
+        if denial:
+            # The source only runs after a gate denied: its output is
+            # governance's own response.
+            pre_node = _strongest_pre_node(pre_node, {
+                "type": "vsl_gate", "strength": _vsl.VSL_GATE_STRENGTH, "evidence_line": denial,
+            })
         pre_node_exists = pre_node is not None and pre_node["strength"] >= GOVERNANCE_STRENGTH_THRESHOLD
 
         return {
@@ -3536,10 +3544,16 @@ def _agent_action_summary(gamma_variants) -> dict:
 
 
 def _vsl_summary(vsl_report) -> dict:
+    human = list(vsl_report.human_authorisations) if vsl_report is not None else []
     if vsl_report is None or not vsl_report.detected:
-        return {"detected": False, "gates_total": 0, "gates_by_kind": {}}
+        return {"detected": False, "gates_total": 0, "gates_by_kind": {}, "human_authorisations": human}
     data = vsl_report.to_dict()
-    return {"detected": True, "gates_total": data["gates_total"], "gates_by_kind": data["gates_by_kind"]}
+    return {
+        "detected": True,
+        "gates_total": data["gates_total"],
+        "gates_by_kind": data["gates_by_kind"],
+        "human_authorisations": human,
+    }
 
 
 def _agent_action_lines(summary: dict) -> list:
@@ -3562,6 +3576,8 @@ def _agent_action_lines(summary: dict) -> list:
             "  Credited from their wiring. Not verified: declared F1/F2 assurance, "
             "Gamma monitors, or runtime behaviour."
         )
+    for human in vsl.get("human_authorisations") or []:
+        lines.append(f"Human Authorisation:               {human['kind']} ({human['location']})")
     return lines
 
 
@@ -4370,7 +4386,7 @@ class ScanEngine:
                         _pn_result = _assess_pre_node_strength(lines, call["line"], language="python")
                         vsl_governed = self.vsl_report.gates_model_call
                         pre_node = _pn_result is not None or vsl_governed
-                        human_review = _has_human_review(lines, call["line"])
+                        human_review = _has_human_review(lines, call["line"]) or self._human_authorised()
                         primitives["ai_integrations"].append({
                             "id": f"AI-{len(primitives['ai_integrations'])+1:03d}",
                             "provider": call["provider"],
@@ -4497,7 +4513,7 @@ class ScanEngine:
                     for call in pattern_calls:
                         _pn_result = _assess_pre_node_strength(lines, call["line"], language="pattern")
                         pre_node = _pn_result is not None
-                        human_review = _has_human_review(lines, call["line"])
+                        human_review = _has_human_review(lines, call["line"]) or self._human_authorised()
                         primitives["ai_integrations"].append({
                             "id": f"AI-{len(primitives['ai_integrations'])+1:03d}",
                             "provider": call["provider"],
@@ -4570,7 +4586,7 @@ class ScanEngine:
                             "dynamic_prompt": False,
                             "user_input_in_prompt": False,
                             "pre_node_detected": _assess_pre_node_strength(lines, finding["line"]) is not None,
-                            "human_review_detected": _has_human_review(lines, finding["line"]),
+                            "human_review_detected": _has_human_review(lines, finding["line"]) or self._human_authorised(),
                             "output_destination": self._detect_output_destination(lines, finding["line"]),
                             "source_file": str(rel_path),
                             "file_context": file_context,
@@ -5334,6 +5350,13 @@ class ScanEngine:
     # using the variable name "query" 15 lines away from an unrelated f-string.
     _DYNAMIC_PROMPT_KEYWORDS = ("prompt", "messages", "content", "system", "user")
     _DYNAMIC_PROMPT_TEMPLATE_SIGNALS = ('f"', "f'", ".format(", "{query}", "{input}", "{task}", "{context}")
+
+    def _human_authorised(self) -> bool:
+        """A recognised human-authorisation mechanism exists (vsl.py): an
+        action that needs a HumanAuthorisedTransition, or a LangGraph
+        interrupt."""
+        vsl_report = getattr(self, "vsl_report", None)
+        return bool(vsl_report and vsl_report.human_authorisations)
 
     def _has_dynamic_prompt(self, content: str, line_num: int) -> bool:
         lines = content.splitlines()

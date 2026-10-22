@@ -653,6 +653,8 @@ def _print_terminal_summary(results, output_path):
     if vsl.get("detected"):
         kinds = ", ".join(f"{n} {k}" for k, n in sorted(vsl.get("gates_by_kind", {}).items()))
         console.print(f"[dim]VSL gates recognised:[/dim]   {vsl['gates_total']}  [dim]({kinds}; wiring only, not verified)[/dim]")
+    for human in vsl.get("human_authorisations") or []:
+        console.print(f"[dim]Human authorisation:[/dim]    {human['kind']}  [dim]({human['location']})[/dim]")
 
     if tendency_state == "failure":
         console.print(f"[bold red]Tendency:[/bold red]               {tendency_state.upper()}")

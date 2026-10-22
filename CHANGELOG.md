@@ -13,6 +13,9 @@
 - **Agent actions.** Tools an agent's model can call (`@tool`) and model
   calls are now counted as consequential decision points, with their own
   scorecard line (`Agent Actions Governed`).
+- **Human authorisation.** Actions that require a vsl-core
+  `HumanAuthorisedTransition`, and LangGraph's `interrupt`, are recognised
+  as human review and listed on the scorecard (`Human Authorisation`).
 
 ### Changed
 
@@ -20,7 +23,9 @@
   repositories may differ from 0.6.0.
 - More precise consequence detection: adding to a list or dict created in
   the same function, and a browser `fetch` to the app's own origin (a
-  relative URL), are no longer counted as consequential actions.
+  relative URL), are no longer counted as consequential actions. A
+  `try`/`finally` without an `except` is no longer reported as a silent
+  failure.
 - The checked-in `evidence/` scans were produced by 0.6.0 and predate
   this release.
 

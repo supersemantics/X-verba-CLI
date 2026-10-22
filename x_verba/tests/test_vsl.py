@@ -206,7 +206,9 @@ def test_tools_and_model_calls_are_agent_actions(ungoverned):
 
 def test_ungoverned_agent_has_no_vsl_section(ungoverned):
     assert ungoverned["vsl"]["detected"] is False
-    assert ungoverned["summary"]["vsl"] == {"detected": False, "gates_total": 0, "gates_by_kind": {}}
+    assert ungoverned["summary"]["vsl"] == {
+        "detected": False, "gates_total": 0, "gates_by_kind": {}, "human_authorisations": [],
+    }
 
 
 # ── VSL gates are recognised and credited ──────────────────────────────────

@@ -434,6 +434,9 @@ Every `@tool` function an agent's model can call, and every AI model integration
 ### VSL gates
 If a repository uses VSL (VERBA Specification Language: vsl-core with the vsl-langgraph or vsl-langchain adapter), X-Verba lists its gates and credits the code each one guards. It reads the wiring only. It does **not** verify whether a gate's declared F1/F2 assurance is honest, whether its Gamma monitor measures anything, or whether the gate fires at runtime.
 
+### Human authorisation
+A "no human review" finding is satisfied by a mechanism in the code, not by words in it: an action that cannot run without a vsl-core `HumanAuthorisedTransition` (a parameter of that type), or LangGraph's human-in-the-loop (`interrupt()`, or a graph compiled with `interrupt_before`/`interrupt_after`). Each one found is listed on the scorecard (`Human Authorisation:`).
+
 ---
 
 ## Installation

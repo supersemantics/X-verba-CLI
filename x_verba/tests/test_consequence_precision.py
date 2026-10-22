@@ -62,3 +62,29 @@ def test_fetch_through_constant():
         assert _is_same_origin_fetch([decl, call], call), decl
     external = 'const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";'
     assert not _is_same_origin_fetch([external, call], call)
+
+
+def test_try_finally_is_not_a_silent_failure(tmp_path):
+    from x_verba.engine import ScanEngine
+
+    (tmp_path / "app.py").write_text(
+        "from openai import OpenAI\n"
+        "client = OpenAI()\n"
+        "\n"
+        "def run(lock):\n"
+        "    lock.acquire()\n"
+        "    try:\n"
+        "        return client.chat.completions.create(model='m', messages=[])\n"
+        "    finally:\n"
+        "        lock.release()\n"
+        "\n"
+        "def swallow():\n"
+        "    try:\n"
+        "        return client.chat.completions.create(model='m', messages=[])\n"
+        "    except Exception:\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    results = ScanEngine().scan(str(tmp_path))
+    locations = [t["location"].replace("\\", "/") for t in results["terminal_states"]]
+    assert locations == ["app.py:12"]
