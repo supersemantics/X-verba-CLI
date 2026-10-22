@@ -72,6 +72,7 @@ class VslReport:
     gated_graph_nodes: Dict[str, Dict[str, str]] = field(default_factory=dict)  # file -> {node: gate}
     gated_tools: Dict[str, str] = field(default_factory=dict)  # tool function -> gate
     gates_model_call: bool = False
+    model_call_gate: Optional[str] = None  # label of the gate in front of the model call
     records_gate_decisions: bool = False
     denial_nodes: Dict[str, Dict[str, str]] = field(default_factory=dict)  # file -> {node: label}
     human_authorisations: List[Dict[str, str]] = field(default_factory=list)
@@ -263,6 +264,8 @@ def analyse(parsed_files: List[dict], base_path: Path) -> VslReport:
         return report
 
     # Pass A: declared gates, compiled-gate variables, gate-decision records.
+    # Declarations are read from every file first, so a gate compiled in one
+    # file from a PreNode declared in another keeps its declared name.
     gate_kinds: Dict[str, str] = {}  # variable holding a gate (declared or compiled) -> label
     for f in files:
         for node in ast.walk(f.tree):
@@ -278,12 +281,17 @@ def analyse(parsed_files: List[dict], base_path: Path) -> VslReport:
                     report.records_gate_decisions = True
             if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
                 target = node.targets[0] if node.targets else None
+                name = _call_name(node.value.func)
+                if isinstance(target, ast.Name) and name in GATE_CONSTRUCTORS:
+                    gate_kinds[target.id] = _gate_label(GATE_CONSTRUCTORS[name], _literal_name(node.value))
+    for f in files:
+        for node in ast.walk(f.tree):
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+                target = node.targets[0] if node.targets else None
                 if not isinstance(target, ast.Name):
                     continue
                 name = _call_name(node.value.func)
-                if name in GATE_CONSTRUCTORS:
-                    gate_kinds[target.id] = _gate_label(GATE_CONSTRUCTORS[name], _literal_name(node.value))
-                elif name in COMPILE_METHODS:
+                if name in COMPILE_METHODS:
                     report.compiled_gates.add(target.id)
                     arg = node.value.args[0] if node.value.args else None
                     kind = COMPILE_METHODS[name]
@@ -318,6 +326,7 @@ def analyse(parsed_files: List[dict], base_path: Path) -> VslReport:
             for n in ast.walk(fn)
         ):
             report.gates_model_call = True
+            report.model_call_gate = report.model_call_gate or gate
 
     # Pass B: what each gate guards.
     for f in files:

@@ -158,3 +158,31 @@ def test_route_on_denial_target_is_a_denial_node():
     report = vsl.analyse([{"extension": ".py", "path": "app/graph.py", "content": source}], Path("."))
     assert report.denial_node("app/graph.py", "blocked") == "VSL denial route to 'blocked'"
     assert report.denial_node("app/graph.py", "release") is None
+
+
+def test_gate_compiled_in_another_file_keeps_its_declared_name():
+    gates = dedent('''
+        from vsl_langgraph import LangGraphAdapter, gated_node
+        from app.policies import consent_prenode
+
+        consent_gate = LangGraphAdapter().compile_pre_node(consent_prenode)
+
+        def run_tools(state):
+            return state
+
+        node = gated_node(consent_gate, run_tools)
+    ''')
+    policies = dedent('''
+        from vsl_core import PreNode
+
+        consent_prenode = PreNode(name="Patient Consent Tool Gate", description="...", monitor=None, assurance_basis=None)
+    ''')
+    # gates.py is read before policies.py, as in a sorted file walk.
+    report = vsl.analyse(
+        [
+            {"extension": ".py", "path": "app/gates.py", "content": gates},
+            {"extension": ".py", "path": "app/policies.py", "content": policies},
+        ],
+        Path("."),
+    )
+    assert report.covering_gate("app/gates.py", 8) == "VSL PreNode 'Patient Consent Tool Gate'"

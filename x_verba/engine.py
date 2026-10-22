@@ -4472,7 +4472,7 @@ class ScanEngine:
                             "pre_node": (
                                 {
                                     "type": "vsl_gate", "strength": _vsl.VSL_GATE_STRENGTH,
-                                    "evidence_line": "VSL PreNode in front of the model call",
+                                    "evidence_line": self.vsl_report.model_call_gate or "VSL PreNode in front of the model call",
                                 } if vsl_governed
                                 else _pn_result if (_pn_result and human_review)
                                 else None
