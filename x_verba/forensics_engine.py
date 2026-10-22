@@ -5,7 +5,7 @@ from rich.panel import Panel
 console = Console()
 
 NOT_IMPLEMENTED_MSG = """
-This command is coming in v0.5.
+This command is not yet available.
 
 x-verba forensics will reverse-engineer governance failures — taking
 a codebase, incident logs, or post-mortem data and producing a full
@@ -18,7 +18,7 @@ The Knight Capital example:
   → Pre-Node gap: activation_conflict_check missing
   → One VSL Eligibility Condition would have prevented $440M loss
 
-Track progress: https://github.com/4vish/x-verba
+Track progress: https://github.com/supersemantics/X-verba-CLI
 """
 
 
@@ -33,5 +33,5 @@ class ForensicsEngine:
             "dc_classes_detected": [],
             "structural_gamma": {"proxy_value": None},
             "status": "not_implemented",
-            "message": "x-verba forensics is coming in v0.5. See https://github.com/4vish/x-verba",
+            "message": "x-verba forensics is not yet available. See https://github.com/supersemantics/X-verba-CLI",
         }

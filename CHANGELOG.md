@@ -31,6 +31,8 @@
   failure.
 - The checked-in `evidence/` scans were produced by 0.6.0 and predate
   this release.
+- Package links, report footers and command messages point to
+  github.com/supersemantics/X-verba-CLI.
 
 ## 0.6.0
 
