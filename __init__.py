@@ -1,6 +1,6 @@
-"""X-VERBA v0.7.0 — Governance Intelligence Platform"""
+"""X-VERBA v0.7.1 — Governance Intelligence Platform"""
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 from x_verba.engine import (
     ScanEngine,

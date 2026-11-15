@@ -260,6 +260,38 @@ _PROVIDER_AMBIGUOUS_AI_CALL_METHODS = {
 }
 
 
+# LangChain chat models are Runnables, called as llm.invoke(...) and friends.
+# The receiver's name is the evidence: `llm`, `self.llm`, `structured_llm`,
+# `deep_thinking_llm`... The model is usually passed in as a parameter, so the
+# calling file often has no LangChain import to corroborate it.
+_LLM_RUNNABLE_METHODS = {"invoke", "ainvoke", "stream", "astream", "batch", "abatch"}
+_LLM_RECEIVER_RE = re.compile(r"(?:^|_)llm(?:_|$)", re.IGNORECASE)
+
+
+def _is_llm_runnable_call(call_str: str) -> bool:
+    parts = call_str.split(".")
+    return (
+        len(parts) >= 2
+        and parts[-1] in _LLM_RUNNABLE_METHODS
+        and bool(_LLM_RECEIVER_RE.search(parts[-2]))
+    )
+
+
+def _piped_llm_call_string(func) -> Optional[str]:
+    """`(prompt | llm).invoke(...)` / `(prompt | llm.bind_tools(t)).invoke(...)`:
+    a LangChain pipe ending in a model. Returns "llm.invoke"-style text when
+    an llm-named object is in the pipe, else None."""
+    if not (isinstance(func, ast.Attribute) and func.attr in _LLM_RUNNABLE_METHODS
+            and isinstance(func.value, ast.BinOp) and isinstance(func.value.op, ast.BitOr)):
+        return None
+    for node in ast.walk(func.value):
+        if isinstance(node, ast.Name) and _LLM_RECEIVER_RE.search(node.id):
+            return f"{node.id}.{func.attr}"
+        if isinstance(node, ast.Attribute) and _LLM_RECEIVER_RE.search(node.attr):
+            return f"{node.attr}.{func.attr}"
+    return None
+
+
 def _call_matches_pattern(call_str: str, pattern: str) -> bool:
     """Match an AI_CALL_METHODS / AGENT_FRAMEWORK_PATTERNS / CONSEQUENCE_TYPE_PATTERNS
     entry against a dotted call expression (e.g. "chain.invoke", "db.delete",
@@ -519,6 +551,26 @@ _NON_GOVERNANCE_DECORATORS = frozenset([
     "login_required",  # auth decorator — too generic, structural check is correct
 ])
 
+# A decorator only counts as a Pre-Node when its name says it checks
+# something. Before 0.7.1 any decorator not in the list above counted
+# (strength 0.6), so @tool (which only registers a function with the agent),
+# @retry, @asynccontextmanager, @dataclass, route decorators and the like
+# were reported as "a checkpoint that doesn't count".
+_GOVERNANCE_DECORATOR_RE = re.compile(
+    r"auth|permission|permit|require|approv|consent|guard|polic|validat|verif|"
+    r"check|allow|deny|role|scope|access|protect|secur|rate_?limit|throttle|"
+    r"gate|precondition|invariant|eligib|sanitis|sanitiz",
+    re.IGNORECASE,
+)
+
+
+def _is_governance_decorator(decorator_line: str) -> bool:
+    """True when a decorator's name (any dotted part) names a check."""
+    name = decorator_line.strip().lstrip("@").split("(")[0].strip()
+    if name.split(".")[0].lower() in _NON_GOVERNANCE_DECORATORS:
+        return False
+    return bool(_GOVERNANCE_DECORATOR_RE.search(name))
+
 # R4: Patterns that indicate framework-level governance in a function signature.
 # Checked against the full (possibly multi-line) parameter list of the containing
 # function. A match means validation/auth runs before the function body executes.
@@ -723,7 +775,7 @@ class ASTAnalyser:
                 continue
 
             func = call_node.func
-            call_str = self._get_call_string(func)
+            call_str = self._get_call_string(func) or _piped_llm_call_string(func)
             if not call_str:
                 continue
 
@@ -773,6 +825,8 @@ class ASTAnalyser:
         root = call_str.split(".")[0]
         if root in self.ai_imports:
             return self.ai_imports[root]
+        if _is_llm_runnable_call(call_str):
+            return "langchain"
 
         for method in AI_CALL_METHODS:
             if _call_matches_pattern(call_str, method):
@@ -1634,6 +1688,63 @@ _MUTATION_RECEIVER_RE = re.compile(r"(?<![\w.)\]])([A-Za-z_$][\w$]*)\s*\.\s*(?:a
 _FUNCTION_START_RE = re.compile(r"^\s*(?:async\s+def|def|class|(?:export\s+)?(?:async\s+)?function)\b")
 
 
+# Right-hand sides that create a new, local container.
+_FRESH_CONTAINER_RHS = (
+    r"\[|\{|list\(|dict\(|set\(|defaultdict\(|Counter\(|OrderedDict\(|deque\(|"
+    r"(?:copy\.)?(?:deep)?copy\(|sorted\("
+)
+_FRESH_CONTAINER_CALLS = {
+    "list", "dict", "set", "defaultdict", "Counter", "OrderedDict", "deque",
+    "copy", "deepcopy", "sorted",
+}
+
+
+def _is_fresh_container_expr(node) -> bool:
+    if isinstance(node, (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)):
+        return True
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in _FRESH_CONTAINER_CALLS:
+            return True
+        if isinstance(func, ast.Attribute) and func.attr in ("copy", "deepcopy") and not node.args[1:]:
+            return True
+    return False
+
+
+def _unpacks_fresh_container(text: str, name: str) -> bool:
+    """True for ``a, b = [], x`` (or ``= {}, set()``...) binding `name` to a
+    new container: the tuple form _mutates_local_container's regex misses."""
+    stripped = text.strip()
+    if "," not in stripped or "=" not in stripped or name not in stripped:
+        return False
+    try:
+        tree = ast.parse(stripped)
+    except (SyntaxError, ValueError):
+        return False
+    if len(tree.body) != 1 or not isinstance(tree.body[0], ast.Assign):
+        return False
+    assign = tree.body[0]
+    value = assign.value
+    if not isinstance(value, ast.Tuple):
+        return False
+    for target in assign.targets:
+        if isinstance(target, (ast.Tuple, ast.List)) and len(target.elts) == len(value.elts):
+            for t, v in zip(target.elts, value.elts):
+                if isinstance(t, ast.Name) and t.id == name and _is_fresh_container_expr(v):
+                    return True
+    return False
+
+
+def _is_kwargs_parameter(lines: list, def_index: int, name: str) -> bool:
+    """True when the function starting at lines[def_index] takes **name."""
+    signature = []
+    for line in lines[def_index:def_index + 15]:
+        signature.append(line)
+        if line.rstrip().endswith(":"):
+            break
+    return bool(re.search(rf"\*\*\s*{re.escape(name)}\b", " ".join(signature)))
+
+
 def _mutates_local_container(lines: list, line_num: int, stripped: str) -> bool:
     """True when every mutation on this line targets a list/dict/set that
     was created in the same function: adding to a local working list is
@@ -1645,15 +1756,17 @@ def _mutates_local_container(lines: list, line_num: int, stripped: str) -> bool:
     for name in set(receivers):
         creation = re.compile(
             rf"^\s*(?:(?:const|let|var)\s+)?{re.escape(name)}\s*(?::[^=]+)?=\s*"
-            r"(?:\[|\{|list\(|dict\(|set\(|defaultdict\(|Counter\(|OrderedDict\()"
+            rf"(?:{_FRESH_CONTAINER_RHS}|.*\.copy\(\)\s*$)"
         )
         found = False
         for i in range(line_num - 2, max(-1, line_num - 200), -1):
             text = lines[i]
-            if creation.search(text):
+            if creation.search(text) or _unpacks_fresh_container(text, name):
                 found = True
                 break
             if _FUNCTION_START_RE.search(text):
+                # A function's own **kwargs dict is local to the call.
+                found = _is_kwargs_parameter(lines, i, name)
                 break  # reached the start of the enclosing function
         if not found:
             return False
@@ -3211,6 +3324,31 @@ class LegionMatcher:
 
 # ── Guard detection — three-signal pipeline (Pass 3) ─────────────────────────
 
+_TRIPLE_QUOTE_RE = re.compile(r'"""|\'\'\'')
+
+
+def _code_lines(lines: list, start: int, end: int) -> List[str]:
+    """lines[start:end] without comment lines and without lines inside
+    triple-quoted strings (docstrings). Keyword checks run on these, so
+    "approve" in a docstring or "# confirm later" isn't read as a gate.
+    String state is tracked from up to 200 lines before `start`."""
+    in_string = False
+    out = []
+    for i in range(max(0, start - 200), min(end, len(lines))):
+        line = lines[i]
+        quotes = len(_TRIPLE_QUOTE_RE.findall(line))
+        was_in_string = in_string
+        if quotes % 2:
+            in_string = not in_string
+        if i < start:
+            continue
+        stripped = line.strip()
+        if was_in_string or quotes or not stripped or stripped.startswith(("#", "//")):
+            continue
+        out.append(line)
+    return out
+
+
 def _find_scope_start(lines: list, line_num: int) -> int:
     """Return the first 1-based line index of the current function/block scope."""
     if line_num <= 1:
@@ -3276,9 +3414,20 @@ def _find_preceding_guard(lines: list, line_num: int, window: int = 30) -> Optio
             continue
         if _is_conditional(stripped):
             condition = _extract_condition(stripped)
+            if _NON_GUARD_CONDITION_RE.match(condition):
+                continue  # selects what runs, checks nothing
             return {"line": i + 1, "indent": indent, "condition": condition,
                     "detection_type": "control_flow"}
     return None
+
+
+# Conditionals that choose which code runs but check nothing about the
+# action: the script entry point and type-checking-only imports.
+_NON_GUARD_CONDITION_RE = re.compile(
+    r"""^\(?\s*(?:__name__\s*==\s*['"]__main__['"]|['"]__main__['"]\s*==\s*__name__|
+    (?:typing\.)?TYPE_CHECKING)\s*\)?\s*$""",
+    re.VERBOSE,
+)
 
 
 def _score_enforcement(lines: list, guard: dict, consequence_line_num: int,
@@ -3341,8 +3490,7 @@ def _find_decorator_guard(lines: list, line_num: int, scan_range: int = 50) -> O
                 if not dec_stripped or dec_stripped.startswith("#"):
                     continue
                 if dec_stripped.startswith("@"):
-                    dec_name = dec_stripped[1:].split("(")[0].split(".")[0].strip()
-                    if dec_name.lower() not in _NON_GOVERNANCE_DECORATORS:
+                    if _is_governance_decorator(dec_stripped):
                         return {"line": j + 1, "evidence": dec_stripped[:120]}
                 else:
                     break
@@ -3365,6 +3513,27 @@ def _find_containing_function_name(lines: list, line_num: int) -> Optional[str]:
     return None
 
 
+def _containing_def_is_method(lines: list, line_num: int) -> bool:
+    """True when the Python def containing line_num sits directly in a class
+    (a method). False for module-level and nested functions, or no def."""
+    dp_line = lines[line_num - 1] if line_num <= len(lines) else ""
+    dp_indent = len(dp_line) - len(dp_line.lstrip())
+    for i in range(line_num - 2, -1, -1):
+        stripped = lines[i].strip()
+        indent = len(lines[i]) - len(lines[i].lstrip())
+        if stripped.startswith(("def ", "async def ")) and indent < dp_indent:
+            for j in range(i - 1, -1, -1):
+                outer = lines[j].strip()
+                # Skip blanks, comments, decorators and the closing line of a
+                # multi-line header, e.g. "):" after "class X(\n    Base,\n".
+                if not outer or outer.startswith(("#", "@", ")", "]", "}")):
+                    continue
+                if len(lines[j]) - len(lines[j].lstrip()) < indent:
+                    return outer.startswith("class ")
+            return False
+    return False
+
+
 def _find_caller_guard(lines: list, line_num: int, window: int = 15) -> Optional[dict]:
     """One-hop caller guard: check if the containing function is called from a guarded site."""
     if not lines or len(lines) > 1000:
@@ -3372,9 +3541,16 @@ def _find_caller_guard(lines: list, line_num: int, window: int = 15) -> Optional
     fn_name = _find_containing_function_name(lines, line_num)
     if not fn_name:
         return None
-    call_pattern = re.compile(rf'\b{re.escape(fn_name)}\s*\(')
+    # A plain (module-level or nested) function is called bare: start(...).
+    # obj.start(...) is then a different function that happens to share the
+    # name (e.g. MainApp().start() vs a CLI's start()). Methods are called on
+    # instances, so for them any call to the name still counts.
+    receiver = r"\b" if _containing_def_is_method(lines, line_num) else r"(?<![\w.])"
+    call_pattern = re.compile(rf"{receiver}{re.escape(fn_name)}\s*\(")
     for i, line in enumerate(lines):
         if i + 1 == line_num:
+            continue
+        if line.lstrip().startswith(("def ", "async def ")):
             continue
         if call_pattern.search(line):
             guard = _find_preceding_guard(lines, i + 1, window)
@@ -3629,6 +3805,30 @@ def _gamma_breakdown(primitives: dict, decision_graph) -> List[dict]:
     return sorted(items, key=lambda i: (i["governed"], order.get(i["kind"], 2), i["file"], i["line"]))
 
 
+def _link_gaps_to_breakdown(gaps: List[dict], breakdown: List[dict]) -> None:
+    """Record on each gap the Structural Gamma decision point it belongs to.
+
+    Gaps and the breakdown are separate checks. A model-call gap sits on the
+    same line as its decision point; an irreversible-action gap sits on the
+    action, which a breakdown item records as `action_location`. Some gaps
+    have no decision point at all (informal invariants, or an action with no
+    decision in front of it). Each gap gets `decision_location` (or None) and
+    `decision_governed` (or None), so a report can say how the two relate:
+    e.g. an action governed by a validation check that still has no
+    authorisation gate."""
+    norm = lambda s: (s or "").replace("\\", "/")
+    by_location = {}
+    for item in breakdown:
+        by_location.setdefault(norm(item.get("location")), item)
+    for item in breakdown:
+        if item.get("action_location"):
+            by_location.setdefault(norm(item["action_location"]), item)
+    for gap in gaps:
+        item = by_location.get(norm(gap.get("location")))
+        gap["decision_location"] = item["location"] if item else None
+        gap["decision_governed"] = item["governed"] if item else None
+
+
 def _strongest_pre_node(*candidates: Optional[dict]) -> Optional[dict]:
     """The strongest of several Pre-Node assessments (None ignored)."""
     found = [c for c in candidates if c]
@@ -3707,10 +3907,8 @@ def _assess_pre_node_strength(
         if stripped.startswith(("def ", "async def ", "class ")) and indent < dp_indent:
             start = i + 1
             break
-    for line in lines[start:line_num - 1]:
+    for line in _code_lines(lines, start, line_num - 1):
         line_lower = line.lower().strip()
-        if not line_lower or line_lower.startswith("#") or line_lower.startswith("//"):
-            continue
         for _cat, spec in _LEGACY_KEYWORD_CATEGORIES.items():
             if any(kw in line_lower for kw in spec["keywords"]):
                 return PreNode(type="legacy_keyword", strength=0.4,
@@ -3826,7 +4024,7 @@ def _has_authorisation_gate(lines: list, line_num: int) -> bool:
     """Check for authorisation gates before irreversible actions."""
     if not lines or line_num == 0:
         return False
-    search_lines = lines[max(0, line_num - 20):line_num - 1]
+    search_lines = _code_lines(lines, max(0, line_num - 20), line_num - 1)
     gate_signals = [
         "approve", "confirm", "authoris", "authoriz",
         "permission", "has_permission", "can_",
@@ -4033,7 +4231,7 @@ class ScanEngine:
             "scan_date": datetime.now(timezone.utc).isoformat(),
             "repo": str(path),
             "identity_key": identity_key,
-            "verba_version": "0.7.0",
+            "verba_version": "0.7.1",
             "context_profile": self.context_profile,
             "all_frameworks": self.all_frameworks,
             "reviewed": False,
@@ -4220,6 +4418,7 @@ class ScanEngine:
             results["gamma_breakdown"] = _gamma_breakdown(primitives, decision_graph)
         except Exception:
             results["gamma_breakdown"] = []
+        _link_gaps_to_breakdown(results.get("gaps") or [], results["gamma_breakdown"])
         results["enhanced_consequences"] = [ec.to_dict() for ec in enhanced_consequences]
         results["graphs"] = {
             "agent_graph": agent_graph,

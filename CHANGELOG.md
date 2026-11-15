@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.7.1
+
+Fixes found by scanning public agent repositories (TradingAgents, TaskWeaver,
+AutoGPT): things read as checkpoints, consequences or missing model calls
+when they aren't. Structural Gamma can go down or up; see the table below.
+
+### Fixed
+
+- **Decorators are checkpoints only when their name says they check
+  something** (auth, permission, approve, consent, validate, verify, guard,
+  policy, role, scope, access, rate limit, throttle, gate…). Before, any
+  decorator not on a short list counted as a weak checkpoint (0.6), so
+  `@tool` (which only registers a function with the agent), `@retry`,
+  `@asynccontextmanager`, `@dataclass` and route or CLI decorators were
+  reported as "a checkpoint that does not count".
+- **Keyword evidence ignores comments and docstrings.** The 0.4 keyword
+  fallback and the irreversible-action authorisation check no longer read
+  "approve" in a docstring or `# confirm later` as a gate. More real
+  ungated actions are now reported.
+- **`if __name__ == "__main__":` and `if TYPE_CHECKING:` are not guards.**
+- **Local containers:** a list or dict created by tuple assignment
+  (`dates, cursor = [], start`), by `.copy()` / `copy.deepcopy()`, and a
+  function's own `**kwargs`, are now recognised as local, so adding to them
+  isn't a consequential action.
+- **Model calls through an `llm` object** (`llm.invoke`, `ainvoke`,
+  `stream`, `batch`, including `structured_llm`, `self.llm` and
+  `(prompt | llm).invoke`) are now counted as LangChain model calls. Agent
+  code usually receives the model as a parameter, so the calling file often
+  has no LangChain import; TradingAgents' 11 model calls were all missed.
+- **Caller guards:** a function's own `def` line is no longer taken for a
+  call to it, and a plain function is no longer "called" by another
+  object's method of the same name (`MainApp().start()` vs a CLI's
+  `start()`). Methods still count calls on instances.
+
+### Added
+
+- **Gaps link to the breakdown.** Each gap now has `decision_location` and
+  `decision_governed`: the Structural Gamma decision point it belongs to, if
+  any. Gaps and the breakdown are separate checks. Model-call gaps sit on
+  their decision point. An irreversible-action gap sits on the action and
+  asks a narrower question (is there an *authorisation* gate?), so an action
+  can be governed by a validation check and still be flagged. Informal
+  invariants, and actions with no decision in front of them, have no
+  decision point (`decision_location: null`).
+
+### Effect on three public repositories
+
+| Repo | 0.7.0 | 0.7.1 | Why |
+|---|---|---|---|
+| TradingAgents | Γ 0.13 (11/83), agent actions 0/12 | Γ 0.05 (4/77), agent actions 0/23 | 11 model calls found; 17 local-list appends removed (7 had been "governed" by unrelated argument checks) |
+| TaskWeaver | Γ 0.19 (45/237), 0/16 | Γ 0.18 (44/239), 0/18 | 2 more model calls; one caller guard was the function's own `def` line |
+| AutoGPT | Γ 0.22 (517/2368), 0/59 | Γ 0.22 (512/2313), 0/59 | 55 local appends removed; 3 caller guards corrected |
+
+### Tests
+
+- 18 new tests in `x_verba/tests/test_scoring_noise.py`; 128 pass.
+
 ## 0.7.0
 
 ### Added
