@@ -36,7 +36,7 @@ BANNER = """
 
 
 @click.group()
-@click.version_option(version="0.7.0", prog_name="x-verba")
+@click.version_option(version="0.7.1", prog_name="x-verba")
 def main():
     """
     X-Verba — Find the governance gaps in your AI code before your users do.
